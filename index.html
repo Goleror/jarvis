@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>JARVIS CORE // V3.0</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="scanlines"></div>
+    <header>
+        <div class="logo"><span class="dot"></span> JARVIS CORE <span class="version">// V3.0</span></div>
+        <div class="status-indicators">
+            <div class="status-box" id="esp-status">⚙ [ESP-32: CONNECTED]</div>
+            <div class="status-box">🀄 [VOICE ENGINE: READY]</div>
+            <div class="status-box">⛨ [SYSTEM: STABLE]</div>
+        </div>
+        <button id="menu-btn" class="menu-btn">☰</button>
+    </header>
+
+    <main>
+        <div id="grid" class="grid-container"></div>
+    </main>
+
+    <div class="visualizer"><div class="bars"></div></div>
+
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <h2><span class="pulse-dot"></span> JARVIS INTERFACE</h2>
+            <button id="close-btn" class="close-btn">✕</button>
+        </div>
+
+        <div class="sidebar-content">
+            <div class="sidebar-section">
+                <h3>🎙 ПРОТОКОЛЫ ГОЛОСОВОГО ВВОДА</h3>
+                <div class="commands-scroller">
+                    
+                    <div class="cmd-group-title">📥 РЕГИСТРАЦИЯ</div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, ячейка А1 болты"</span>
+                        <span class="cmd-desc">Записать предмет</span>
+                    </div>
+
+                    <div class="cmd-group-title">🔍 ПОИСК</div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, где ручка?"</span>
+                        <span class="cmd-desc">Найти в базе</span>
+                    </div>
+
+                    <div class="cmd-group-title">🗑 КОРРЕКЦИЯ ДАННЫХ</div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, удали болты из А1"</span>
+                        <span class="cmd-desc">Убрать конкретный предмет</span>
+                    </div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, очисти ячейку Б2"</span>
+                        <span class="cmd-desc">Полная зачистка сектора</span>
+                    </div>
+
+                    <div class="cmd-group-title">💡 ИНДИКАЦИЯ И СИСТЕМА</div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, подсвети Г4"</span>
+                        <span class="cmd-desc">Ручная подсветка</span>
+                    </div>
+                    <div class="cmd-item">
+                        <span class="cmd-val">"Джарвис, выключи всё"</span>
+                        <span class="cmd-desc">Энергосбережение</span>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>>_ СИСТЕМНЫЕ ЛОГИ</h3>
+                <div id="sys-logs" class="terminal-box cyan-glow"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>⚠ КОНСОЛЬ ОШИБОК</h3>
+                <div id="sys-errors" class="terminal-box red-glow"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <button id="btn-reset" class="stark-btn">↻ СБРОС СВЕТА</button>
+            </div>
+        </div>
+    </aside>
+
+    <script src="script.js"></script>
+</body>
+</html>
