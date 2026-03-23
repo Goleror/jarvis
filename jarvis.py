@@ -9,8 +9,18 @@ ESP_IP = "192.168.9.215"
 MODEL_PATH = "model"
 INVENTORY_FILE = "inventory.json"
 SOUNDS_DIR = "sounds"
-AUTO_OFF_TIME = 10.0  # Свет гаснет через 10 сек
-SESSION_TIME = 15.0   # Джарвис слушает 15 сек после последней команды
+AUTO_OFF_TIME = 10.0 
+SESSION_TIME = 15.0   
+
+# --- СЛОВАРЬ СИНОНИМОВ (Ru <-> En) ---
+# Добавляй сюда пары слов, которые часто путаются
+SYNONYMS = {
+    "тест": "test", "test": "тест",
+    "ардуино": "arduino", "arduino": "ардуино",
+    "кабель": "cable", "cable": "кабель",
+    "блок питания": "power supply",
+    "нож": "knife", "knife": "нож"
+}
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 morph = pymorphy3.MorphAnalyzer()
@@ -36,6 +46,7 @@ def add_log(msg, is_error=False):
         print(f">>> [LOG] {msg}")
 
 def play_sound(folder):
+    # Используем твое название папки "succes"
     path = os.path.join(SOUNDS_DIR, folder)
     if os.path.exists(path):
         files = [f for f in os.listdir(path) if f.endswith(".wav")]
@@ -86,6 +97,27 @@ def extract_cell(text):
         return f"{l}{match.group(2)}"
     return None
 
+# --- ФУНКЦИЯ УМНОГО СРАВНЕНИЯ СЛОВ ---
+def words_match(search_word, target_word):
+    search_word = search_word.lower().strip()
+    target_word = target_word.lower().strip()
+    
+    # 1. Прямое совпадение
+    if search_word == target_word or search_word in target_word or target_word in search_word:
+        return True
+    
+    # 2. Совпадение по нормальной форме (для русского)
+    search_norm = morph.parse(search_word)[0].normal_form
+    target_norm = morph.parse(target_word)[0].normal_form
+    if search_norm == target_norm:
+        return True
+    
+    # 3. Совпадение через словарь синонимов (Ru <-> En)
+    if SYNONYMS.get(search_norm) == target_norm or SYNONYMS.get(target_norm) == search_norm:
+        return True
+    
+    return False
+
 # --- ГЛАВНАЯ ЛОГИКА ---
 def process_intent(text):
     global led_timer
@@ -96,7 +128,7 @@ def process_intent(text):
     if any(w in text for w in ["выключи", "погаси", "отключи", "пока"]):
         if led_timer: led_timer.cancel()
         command_esp("/off"); add_log("STANDBY Mode Active")
-        play_sound("success"); return True # Возвращает True, чтобы закрыть 15-сек сессию
+        play_sound("succes"); return True
 
     # 2. ОЧИСТКА ЯЧЕЙКИ
     if "очист" in text or "удали все" in text:
@@ -105,38 +137,51 @@ def process_intent(text):
             save_inventory()
             command_esp(f"/light?cell={cell}&r=255&g=0&b=0")
             add_log(f"System: Сектор {cell} очищен")
-            play_sound("success"); start_led_timer(); return False
+            play_sound("succes"); start_led_timer(); return False
 
-    # 3. ПОИСК
-    if any(w in text for w in ["где", "найди"]):
+    # 3. ПОИСК (ДВУЯЗЫЧНЫЙ)
+    if any(w in text for w in ["где", "найди", "покажи"]):
         found_cell = None
-        search_query = " ".join([morph.parse(w)[0].normal_form for w in text.split() if w not in ["где", "найди", "джарвис"]])
+        # Выделяем слова запроса (убираем "где", "найди" и т.д.)
+        query_words = [w for w in text.split() if w not in ["где", "найди", "покажи", "джарвис", "лежит", "находится"]]
+        
         for c, items in inventory.items():
             for item in items:
-                if search_query in item or item in search_query:
-                    found_cell = c; break
+                # Проверяем каждое слово из запроса против каждого предмета в базе
+                for qw in query_words:
+                    if words_match(qw, item):
+                        found_cell = c; break
+            if found_cell: break
+            
         if found_cell:
             command_esp(f"/light?cell={found_cell}&r=0&g=255&b=0")
             add_log(f"Locator: сектор {found_cell}")
-            play_sound("success"); start_led_timer(); return False
+            play_sound("succes"); start_led_timer(); return False
         else:
             add_log(f"Объект не найден", True); return False
 
     # 4. УДАЛИТЬ ПРЕДМЕТ
     if "удали" in text or "убери" in text:
         if cell:
-            words = [morph.parse(w)[0].normal_form for w in text.split()]
+            words = text.split()
             for item in inventory.get(cell, []):
-                if morph.parse(item)[0].normal_form in words:
-                    inventory[cell].remove(item); save_inventory()
-                    command_esp(f"/light?cell={cell}&r=255&g=0&b=0")
-                    add_log(f"Modified: {item} удален")
-                    play_sound("success"); start_led_timer(); return False
+                for w in words:
+                    if words_match(w, item):
+                        inventory[cell].remove(item); save_inventory()
+                        command_esp(f"/light?cell={cell}&r=255&g=0&b=0")
+                        add_log(f"Modified: {item} удален")
+                        play_sound("succes"); start_led_timer(); return False
 
-    # 5. ДОБАВЛЕНИЕ / ПОДСВЕТКА
+    # 5. УНИВЕРСАЛЬНАЯ КОМАНДА (Добавление/Подсветка)
     if cell:
-        forbidden = ["джарвис", "ячейка", "личинка", "добавь", "запиши", "в", "на", cell.lower()]
-        clean_words = [morph.parse(w)[0].normal_form for w in text.split() if w not in forbidden and len(w) > 2]
+        forbidden = ["джарвис", "ячейка", "личинка", "добавь", "запиши", "в", "на", "сектор", cell.lower()]
+        words_list = text.split()
+        clean_words = []
+        for w in words_list:
+            if w not in forbidden and len(w) > 2:
+                if not (len(w) == 1 and w in "абвгд"):
+                    # Сохраняем как есть (если английское - пусть будет английским)
+                    clean_words.append(w)
         
         if clean_words:
             item = " ".join(clean_words) 
@@ -145,25 +190,19 @@ def process_intent(text):
                 inventory[cell].append(item); save_inventory()
                 command_esp(f"/light?cell={cell}&r=0&g=150&b=255")
                 add_log(f"Update: {item} -> {cell}")
-                play_sound("success"); start_led_timer()
+                play_sound("succes"); start_led_timer()
             return False
         else:
             command_esp(f"/light?cell={cell}&r=255&g=100&b=0")
-            add_log(f"Visualizing sector {cell}")
-            play_sound("success"); start_led_timer(); return False
+            add_log(f"Visualizing sector {cell}"); play_sound("succes"); start_led_timer(); return False
 
     add_log(f"Команда не распознана: {text}", True)
     return False
 
-# --- ВАЖНО: WEB API ДЛЯ ФРОНТЕНДА (ОНО ПРОПАЛО В ПРОШЛЫЙ РАЗ) ---
+# --- WEB API ---
 @app.route('/api/status')
 def get_status():
-    return jsonify({
-        "inventory": inventory, 
-        "logs": logs[-15:], 
-        "errors": errors[-15:], 
-        "esp_status": esp_connected
-    })
+    return jsonify({"inventory": inventory, "logs": logs[-15:], "errors": errors[-15:], "esp_status": esp_connected})
 
 @app.route('/api/command')
 def api_command():
@@ -171,48 +210,33 @@ def api_command():
         if led_timer: led_timer.cancel()
         command_esp("/off")
     return jsonify({"status": "ok"})
-# -----------------------------------------------------------------
 
 # --- ОБРАБОТКА АУДИО ---
 def callback(indata, frames, time, status): q.put(bytes(indata))
 
 def listen_command_google():
-    """Записывает 5 секунд и отправляет в Google"""
     fs = 16000
     duration = 5
     try:
-        time.sleep(0.2)
+        time.sleep(0.3)
+        print("🔴 СЛУШАЮ КОМАНДУ...")
         rec_data = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16'); sd.wait()
         audio = sr.AudioData(rec_data.tobytes(), fs, 2)
         return sr.Recognizer().recognize_google(audio, language="ru-RU")
     except: return None
 
 def main_loop():
-    if not os.path.exists(MODEL_PATH): 
-        print(f"ОШИБКА: Папка {MODEL_PATH} не найдена!")
-        return
-        
-    print(">>> [SYSTEM] Загрузка нейропрофиля Vosk...")
-    try:
-        vosk_model = Model(MODEL_PATH)
-    except Exception as e:
-        print(f"!!! Ошибка загрузки модели Vosk: {e}")
-        return
+    if not os.path.exists(MODEL_PATH): return
+    print(">>> [SYSTEM] Загрузка Vosk...")
+    vosk_model = Model(MODEL_PATH)
 
-    add_log("Jarvis Core Online. All systems nominal.")
-    play_sound("привет")
-    command_esp("/off")
+    add_log("Jarvis Core Online. Listening mode active.")
+    play_sound("привет"); command_esp("/off")
 
-    print(">>> [SYSTEM] Запуск Flask API...")
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False), daemon=True).start()
-
-    print("\n" + "="*40)
-    print("ДЖАРВИС ГОТОВ. Жду активации...")
-    print("="*40 + "\n")
 
     while True:
         try:
-            # 1. РЕЖИМ ОЖИДАНИЯ (VOSK)
             with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16', channels=1, callback=callback):
                 rec = KaldiRecognizer(vosk_model, 16000)
                 activated = False
@@ -222,38 +246,25 @@ def main_loop():
                         res = json.loads(rec.Result()).get("text", "")
                         if "джарвис" in res or "jarvis" in res: activated = True
             
-            # 2. РЕЖИМ АКТИВНОЙ СЕССИИ (GOOGLE)
             if activated:
                 play_sound("yessir")
-                add_log("Сессия активирована. Слушаю...")
-                
                 session_end_time = time.time() + SESSION_TIME
-                
                 while time.time() < session_end_time:
                     cmd = listen_command_google()
-                    
                     if cmd:
                         print(f"Обработка: {cmd}")
                         if "джарвис" in cmd.lower() and len(cmd.split()) < 3: 
                             play_sound("yessir")
                             session_end_time = time.time() + SESSION_TIME 
                             continue
-
                         add_log(f"Voice Command: '{cmd}'")
-                        should_exit = process_intent(cmd)
-                        
-                        if should_exit: break
-                        
+                        if process_intent(cmd): break # Выход при "пока"
                         session_end_time = time.time() + SESSION_TIME
                     else:
-                        print(f"Тишина... До конца сессии: {int(session_end_time - time.time())} сек.")
-                
-                add_log("Сессия завершена. Переход в режим ожидания.")
+                        print(f"До конца сессии: {int(session_end_time - time.time())} сек.")
                 while not q.empty(): q.get()
-
         except Exception as e:
-            print(f"Ошибка в основном цикле: {e}")
-            time.sleep(1)
+            print(f"Restart: {e}"); time.sleep(1)
 
 if __name__ == '__main__':
     try: main_loop()
