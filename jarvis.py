@@ -9,7 +9,8 @@ ESP_IP = "192.168.9.215"
 MODEL_PATH = "model"
 INVENTORY_FILE = "inventory.json"
 SOUNDS_DIR = "sounds"
-AUTO_OFF_TIME = 10.0 
+AUTO_OFF_TIME = 10.0  # Свет гаснет через 10 сек
+SESSION_TIME = 15.0   # Джарвис слушает 15 сек после последней команды
 
 # --- ИНИЦИАЛИЗАЦИЯ ---
 morph = pymorphy3.MorphAnalyzer()
@@ -21,14 +22,14 @@ esp_connected = "OFFLINE"
 q = queue.Queue()
 led_timer = None 
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- ФУНКЦИИ ПОДДЕРЖКИ ---
 
 def add_log(msg, is_error=False):
     t = time.strftime("%H:%M:%S")
     entry = {"time": t, "msg": msg}
     if is_error:
         errors.append(entry)
-        play_sound("error") # Звук ошибки остается в своей папке
+        play_sound("error")
         print(f"!!! [ERR] {msg}")
     else:
         logs.append(entry)
@@ -85,7 +86,7 @@ def extract_cell(text):
         return f"{l}{match.group(2)}"
     return None
 
-# --- ГЛАВНАЯ ЛОГИКА ОБРАБОТКИ КОМАНД ---
+# --- ГЛАВНАЯ ЛОГИКА ---
 def process_intent(text):
     global led_timer
     text = text.lower()
@@ -95,7 +96,7 @@ def process_intent(text):
     if any(w in text for w in ["выключи", "погаси", "отключи", "пока"]):
         if led_timer: led_timer.cancel()
         command_esp("/off"); add_log("STANDBY Mode Active")
-        play_sound("success"); return # УСПЕХ
+        play_sound("success"); return True # Возвращает True, чтобы закрыть 15-сек сессию
 
     # 2. ОЧИСТКА ЯЧЕЙКИ
     if "очист" in text or "удали все" in text:
@@ -104,7 +105,7 @@ def process_intent(text):
             save_inventory()
             command_esp(f"/light?cell={cell}&r=255&g=0&b=0")
             add_log(f"System: Сектор {cell} очищен")
-            play_sound("success"); start_led_timer(); return # УСПЕХ
+            play_sound("success"); start_led_timer(); return False
 
     # 3. ПОИСК
     if any(w in text for w in ["где", "найди"]):
@@ -117,9 +118,9 @@ def process_intent(text):
         if found_cell:
             command_esp(f"/light?cell={found_cell}&r=0&g=255&b=0")
             add_log(f"Locator: сектор {found_cell}")
-            play_sound("success"); start_led_timer(); return # УСПЕХ
+            play_sound("success"); start_led_timer(); return False
         else:
-            add_log(f"Объект не найден", True); return # ОШИБКА (звук из add_log)
+            add_log(f"Объект не найден", True); return False
 
     # 4. УДАЛИТЬ ПРЕДМЕТ
     if "удали" in text or "убери" in text:
@@ -130,7 +131,7 @@ def process_intent(text):
                     inventory[cell].remove(item); save_inventory()
                     command_esp(f"/light?cell={cell}&r=255&g=0&b=0")
                     add_log(f"Modified: {item} удален")
-                    play_sound("success"); start_led_timer(); return # УСПЕХ
+                    play_sound("success"); start_led_timer(); return False
 
     # 5. ДОБАВЛЕНИЕ / ПОДСВЕТКА
     if cell:
@@ -144,19 +145,25 @@ def process_intent(text):
                 inventory[cell].append(item); save_inventory()
                 command_esp(f"/light?cell={cell}&r=0&g=150&b=255")
                 add_log(f"Update: {item} -> {cell}")
-                play_sound("success"); start_led_timer() # УСПЕХ
-            return
+                play_sound("success"); start_led_timer()
+            return False
         else:
             command_esp(f"/light?cell={cell}&r=255&g=100&b=0")
             add_log(f"Visualizing sector {cell}")
-            play_sound("success"); start_led_timer(); return # УСПЕХ
+            play_sound("success"); start_led_timer(); return False
 
-    add_log(f"Команда не распознана: {text}", True) # ОШИБКА
+    add_log(f"Команда не распознана: {text}", True)
+    return False
 
-# --- WEB API ---
+# --- ВАЖНО: WEB API ДЛЯ ФРОНТЕНДА (ОНО ПРОПАЛО В ПРОШЛЫЙ РАЗ) ---
 @app.route('/api/status')
 def get_status():
-    return jsonify({"inventory": inventory, "logs": logs[-15:], "errors": errors[-15:], "esp_status": esp_connected})
+    return jsonify({
+        "inventory": inventory, 
+        "logs": logs[-15:], 
+        "errors": errors[-15:], 
+        "esp_status": esp_connected
+    })
 
 @app.route('/api/command')
 def api_command():
@@ -164,36 +171,48 @@ def api_command():
         if led_timer: led_timer.cancel()
         command_esp("/off")
     return jsonify({"status": "ok"})
+# -----------------------------------------------------------------
 
 # --- ОБРАБОТКА АУДИО ---
 def callback(indata, frames, time, status): q.put(bytes(indata))
 
 def listen_command_google():
+    """Записывает 5 секунд и отправляет в Google"""
     fs = 16000
     duration = 5
     try:
-        time.sleep(0.3)
-        print("🔴 СЛУШАЮ КОМАНДУ...")
+        time.sleep(0.2)
         rec_data = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16'); sd.wait()
         audio = sr.AudioData(rec_data.tobytes(), fs, 2)
         return sr.Recognizer().recognize_google(audio, language="ru-RU")
     except: return None
 
 def main_loop():
-    if not os.path.exists(MODEL_PATH): return
-    
+    if not os.path.exists(MODEL_PATH): 
+        print(f"ОШИБКА: Папка {MODEL_PATH} не найдена!")
+        return
+        
     print(">>> [SYSTEM] Загрузка нейропрофиля Vosk...")
-    vosk_model = Model(MODEL_PATH)
+    try:
+        vosk_model = Model(MODEL_PATH)
+    except Exception as e:
+        print(f"!!! Ошибка загрузки модели Vosk: {e}")
+        return
 
     add_log("Jarvis Core Online. All systems nominal.")
-    play_sound("привет") # Приветствие
+    play_sound("привет")
     command_esp("/off")
 
     print(">>> [SYSTEM] Запуск Flask API...")
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000), daemon=True).start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False), daemon=True).start()
+
+    print("\n" + "="*40)
+    print("ДЖАРВИС ГОТОВ. Жду активации...")
+    print("="*40 + "\n")
 
     while True:
         try:
+            # 1. РЕЖИМ ОЖИДАНИЯ (VOSK)
             with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16', channels=1, callback=callback):
                 rec = KaldiRecognizer(vosk_model, 16000)
                 activated = False
@@ -203,18 +222,38 @@ def main_loop():
                         res = json.loads(rec.Result()).get("text", "")
                         if "джарвис" in res or "jarvis" in res: activated = True
             
+            # 2. РЕЖИМ АКТИВНОЙ СЕССИИ (GOOGLE)
             if activated:
-                play_sound("yessir") # ЗВУК АКТИВАЦИИ ("Да, сэр")
-                cmd = listen_command_google()
-                if cmd: 
-                    add_log(f"Voice Command: '{cmd}'")
-                    process_intent(cmd) # Звук успеха будет внутри этой функции
-                else: 
-                    add_log("Voice engine timeout", True) # Звук ошибки будет внутри add_log
+                play_sound("yessir")
+                add_log("Сессия активирована. Слушаю...")
                 
+                session_end_time = time.time() + SESSION_TIME
+                
+                while time.time() < session_end_time:
+                    cmd = listen_command_google()
+                    
+                    if cmd:
+                        print(f"Обработка: {cmd}")
+                        if "джарвис" in cmd.lower() and len(cmd.split()) < 3: 
+                            play_sound("yessir")
+                            session_end_time = time.time() + SESSION_TIME 
+                            continue
+
+                        add_log(f"Voice Command: '{cmd}'")
+                        should_exit = process_intent(cmd)
+                        
+                        if should_exit: break
+                        
+                        session_end_time = time.time() + SESSION_TIME
+                    else:
+                        print(f"Тишина... До конца сессии: {int(session_end_time - time.time())} сек.")
+                
+                add_log("Сессия завершена. Переход в режим ожидания.")
                 while not q.empty(): q.get()
+
         except Exception as e:
-            print(f"Loop restart: {e}"); time.sleep(1)
+            print(f"Ошибка в основном цикле: {e}")
+            time.sleep(1)
 
 if __name__ == '__main__':
     try: main_loop()
